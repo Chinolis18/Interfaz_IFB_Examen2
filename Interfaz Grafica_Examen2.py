@@ -114,6 +114,7 @@ class MainWindow:
         module_b_window = tk.Toplevel(self.root)
         ModuleB(module_b_window)
 
+
 #-----------------------Modulo A ----------------------------------------------
 class ModuleA:
     def __init__(self, window):
@@ -807,22 +808,30 @@ class ModuleA:
                 predictions.append('Estático')
         
         return predictions
+
+
 #----------------------------------------Modulo B--------------------------------------------------
+
 class ModuleB:
     def __init__(self, window):
         self.window = window
-        self.window.title("Módulo B - Adquisición en Vivo")
+        self.window.title("Módulo B - Adquisición en Vivo - WT9011DCL")
         self.window.geometry("1400x900")
         self.window.configure(bg="#24525E")
         
         # Variables de control
         self.is_acquiring = False
         self.serial_connection = None
-        self.data_buffer = deque(maxlen=1000)  # Buffer para gráficos en tiempo real
-        self.raw_data = []  # Almacenar todos los datos crudos
-        self.sampling_rate = 100  # Hz
+        self.data_buffer = deque(maxlen=1000)
+        self.raw_data = []
+        self.sampling_rate = 100
         self.start_time = None
-        
+        self.raw_bytes_buffer = bytearray()
+        self.packet_count = 0
+        self.last_accel_data = {'Ax': 0.0, 'Ay': 0.0, 'Az': 0.0}
+        self.last_gyro_data = {'Gx': 0.0, 'Gy': 0.0, 'Gz': 0.0}
+        self.serial_lock = threading.Lock()  # Lock para operaciones seriales
+
         # Header
         header = tk.Frame(window, bg="#D348D8", height=80)
         header.pack(fill="x")
@@ -845,38 +854,36 @@ class ModuleB:
 
         self.setup_controls(left_panel)
         self.setup_graphs(right_panel)
-        
-        # Inicializar gráficos
         self.initialize_plots()
 
     def setup_controls(self, parent):
         """Configura el panel de controles"""
-        # Frame de configuración serial
         serial_frame = tk.LabelFrame(parent, text="Configuración Serial", 
                                    font=("Arial", 10, "bold"), bg="#2C3E50", fg="white",
                                    padx=10, pady=10)
         serial_frame.pack(fill="x", padx=10, pady=10)
 
         # Puerto COM
-        tk.Label(serial_frame, text="Puerto COM:", bg="#2C3E50", fg="white", 
-                font=("Arial", 9)).grid(row=0, column=0, sticky="w", padx=5, pady=5)
-        self.com_port_var = tk.StringVar(value="COM8")
-        com_entry = tk.Entry(serial_frame, textvariable=self.com_port_var, width=15,
-                           font=("Arial", 9))
+        tk.Label(serial_frame, text="Puerto COM:", bg="#2C3E50", fg="white").grid(row=0, column=0, sticky="w", padx=5, pady=5)
+        self.com_port_var = tk.StringVar(value="COM3")
+        com_entry = tk.Entry(serial_frame, textvariable=self.com_port_var, width=15)
         com_entry.grid(row=0, column=1, padx=5, pady=5)
 
         # Botón para buscar puertos
         tk.Button(serial_frame, text="Buscar Puertos", command=self.search_ports,
-                 bg="#3498DB", fg="white", width=12, font=("Arial", 9)).grid(row=0, column=2, padx=5, pady=5)
+                 bg="#3498DB", fg="white", width=12).grid(row=0, column=2, padx=5, pady=5)
 
         # Baud rate
-        tk.Label(serial_frame, text="Baud Rate:", bg="#2C3E50", fg="white",
-                font=("Arial", 9)).grid(row=1, column=0, sticky="w", padx=5, pady=5)
+        tk.Label(serial_frame, text="Baud Rate:", bg="#2C3E50", fg="white").grid(row=1, column=0, sticky="w", padx=5, pady=5)
         self.baud_var = tk.StringVar(value="115200")
         baud_combo = ttk.Combobox(serial_frame, textvariable=self.baud_var, 
-                                 values=["9600", "19200", "38400", "57600", "115200"], 
+                                 values=["9600", "19200", "38400", "57600", "115200", "230400"], 
                                  width=13, state="readonly")
         baud_combo.grid(row=1, column=1, padx=5, pady=5)
+
+        # Botón TEST de comunicación
+        tk.Button(serial_frame, text="TEST Comunicación", command=self.test_communication,
+                 bg="#E67E22", fg="white", width=15).grid(row=1, column=2, padx=5, pady=5)
 
         # Frame de controles de adquisición
         control_frame = tk.LabelFrame(parent, text="Control de Adquisición", 
@@ -884,7 +891,6 @@ class ModuleB:
                                     padx=10, pady=10)
         control_frame.pack(fill="x", padx=10, pady=10)
 
-        # Botones de control
         btn_frame = tk.Frame(control_frame, bg="#2C3E50")
         btn_frame.pack(pady=10)
         
@@ -948,6 +954,70 @@ class ModuleB:
                               command=self.update_plots)
             cb.pack(side="left", padx=15)
 
+        # Frame de utilidades adicionales
+        utils_frame = tk.LabelFrame(parent, text="Utilidades", 
+                                  font=("Arial", 10, "bold"), bg="#2C3E50", fg="white",
+                                  padx=10, pady=10)
+        utils_frame.pack(fill="x", padx=10, pady=10)
+
+        utils_btn_frame = tk.Frame(utils_frame, bg="#2C3E50")
+        utils_btn_frame.pack(pady=5)
+
+        # Botón de calibración
+        tk.Button(utils_btn_frame, text="Calibrar Sensor", 
+                 command=self.calibrate_sensor,
+                 bg="#F39C12", fg="white", width=15, height=1,
+                 font=("Arial", 9)).pack(side="left", padx=5)
+
+        # Botón para borrar todo
+        tk.Button(utils_btn_frame, text="Borrar Todo", 
+                 command=self.clear_all_data,
+                 bg="#E74C3C", fg="white", width=15, height=1,
+                 font=("Arial", 9)).pack(side="left", padx=5)
+
+        # Frame de información en tiempo real
+        info_frame = tk.LabelFrame(parent, text="Información en Tiempo Real", 
+                                 font=("Arial", 10, "bold"), bg="#2C3E50", fg="white",
+                                 padx=10, pady=10)
+        info_frame.pack(fill="x", padx=10, pady=10)
+
+        info_content = tk.Frame(info_frame, bg="#2C3E50")
+        info_content.pack(fill="x", pady=5)
+
+        self.status_label = tk.Label(info_content, text="Estado: Desconectado", 
+                                   bg="#2C3E50", fg="#F1C40F", font=("Arial", 10, "bold"))
+        self.status_label.pack(anchor="w", pady=2)
+
+        self.samples_label = tk.Label(info_content, text="Muestras: 0", 
+                                    bg="#2C3E50", fg="white")
+        self.samples_label.pack(anchor="w", pady=2)
+
+        self.packets_label = tk.Label(info_content, text="Paquetes: 0", 
+                                    bg="#2C3E50", fg="white")
+        self.packets_label.pack(anchor="w", pady=2)
+
+        self.bytes_label = tk.Label(info_content, text="Bytes en buffer: 0", 
+                                  bg="#2C3E50", fg="white")
+        self.bytes_label.pack(anchor="w", pady=2)
+
+        self.duration_label = tk.Label(info_content, text="Duración: 0s", 
+                                     bg="#2C3E50", fg="white")
+        self.duration_label.pack(anchor="w", pady=2)
+
+        # Valores actuales
+        values_frame = tk.Frame(info_content, bg="#2C3E50")
+        values_frame.pack(fill="x", pady=5)
+        
+        self.accel_values_label = tk.Label(values_frame, 
+                                         text="Acel: X:0.000 Y:0.000 Z:0.000 g", 
+                                         bg="#2C3E50", fg="#27AE60")
+        self.accel_values_label.pack(anchor="w", pady=2)
+        
+        self.gyro_values_label = tk.Label(values_frame, 
+                                        text="Giro: X:0.000 Y:0.000 Z:0.000 °/s", 
+                                        bg="#2C3E50", fg="#3498DB")
+        self.gyro_values_label.pack(anchor="w", pady=2)
+
         # Frame de guardado
         save_frame = tk.LabelFrame(parent, text="Guardar Datos", 
                                  font=("Arial", 10, "bold"), bg="#2C3E50", fg="white",
@@ -959,29 +1029,29 @@ class ModuleB:
                  bg="#2980B9", fg="white", width=20, height=2,
                  font=("Arial", 10)).pack(pady=10)
 
-        # Frame de información
-        info_frame = tk.LabelFrame(parent, text="Información", 
-                                 font=("Arial", 10, "bold"), bg="#2C3E50", fg="white",
-                                 padx=10, pady=10)
-        info_frame.pack(fill="x", padx=10, pady=10)
+        # Consola de debug
+        debug_frame = tk.LabelFrame(parent, text="Consola de Debug", 
+                                  font=("Arial", 10, "bold"), bg="#2C3E50", fg="white",
+                                  padx=10, pady=10)
+        debug_frame.pack(fill="x", padx=10, pady=10)
 
-        info_content = tk.Frame(info_frame, bg="#2C3E50")
-        info_content.pack(fill="x", pady=5)
+        self.debug_text = tk.Text(debug_frame, height=6, width=50, bg="#1C2833", fg="#2ECC71",
+                                font=("Consolas", 8))
+        scrollbar = tk.Scrollbar(debug_frame, command=self.debug_text.yview)
+        self.debug_text.config(yscrollcommand=scrollbar.set)
+        self.debug_text.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        self.status_label = tk.Label(info_content, text="Estado: Desconectado", 
-                                   bg="#2C3E50", fg="#F1C40F", font=("Arial", 10, "bold"),
-                                   justify="left")
-        self.status_label.pack(anchor="w", pady=2)
-
-        self.samples_label = tk.Label(info_content, text="Muestras: 0", 
-                                    bg="#2C3E50", fg="white", font=("Arial", 9),
-                                    justify="left")
-        self.samples_label.pack(anchor="w", pady=2)
-
-        self.duration_label = tk.Label(info_content, text="Duración: 0s", 
-                                     bg="#2C3E50", fg="white", font=("Arial", 9),
-                                     justify="left")
-        self.duration_label.pack(anchor="w", pady=2)
+    def debug_log(self, message):
+        """Agrega mensajes a la consola de debug"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_message = f"[{timestamp}] {message}\n"
+        self.debug_text.insert(tk.END, log_message)
+        self.debug_text.see(tk.END)
+        # Limitar el tamaño del log
+        if int(self.debug_text.index('end-1c').split('.')[0]) > 100:
+            self.debug_text.delete(1.0, 2.0)
+        print(log_message.strip())
 
     def setup_graphs(self, parent):
         """Configura los gráficos en tiempo real"""
@@ -1036,52 +1106,235 @@ class ModuleB:
         # Dibujar canvas inicial
         self.canvas.draw()
 
+    def safe_serial_operation(self, operation, *args, **kwargs):
+        """Ejecuta operaciones seriales de manera segura con lock"""
+        with self.serial_lock:
+            if self.serial_connection and self.serial_connection.is_open:
+                try:
+                    return operation(*args, **kwargs)
+                except (serial.SerialException, OSError) as e:
+                    self.debug_log(f"Error en operación serial: {e}")
+                    return None
+            return None
+
     def search_ports(self):
         """Busca y muestra los puertos COM disponibles"""
         try:
             ports = serial.tools.list_ports.comports()
-            port_list = [f"{port.device} - {port.description}" for port in ports]
+            port_list = [port.device for port in ports]
             
             if port_list:
-                port_info = "\n".join(port_list)
+                self.debug_log(f"Puertos encontrados: {', '.join(port_list)}")
+                # Actualizar el campo COM con el primer puerto encontrado
+                if port_list and not self.com_port_var.get():
+                    self.com_port_var.set(port_list[0])
                 messagebox.showinfo("Puertos COM Disponibles", 
-                                  f"Puertos encontrados:\n\n{port_info}")
+                                  f"Puertos encontrados:\n\n{chr(10).join(port_list)}")
             else:
+                self.debug_log("No se encontraron puertos COM")
                 messagebox.showwarning("Sin Puertos", "No se encontraron puertos COM disponibles")
         except Exception as e:
+            self.debug_log(f"Error buscando puertos: {str(e)}")
             messagebox.showerror("Error", f"Error buscando puertos: {str(e)}")
 
-    def start_acquisition(self):
-        """Inicia la adquisición de datos"""
+    def test_communication(self):
+        """Test de comunicación con mejor manejo de recursos"""
+        port = self.com_port_var.get().strip()
+        baud = self.baud_var.get()
+        
+        if not port:
+            messagebox.showwarning("Advertencia", "Ingresa un puerto COM válido")
+            return
+        
+        # Asegurarse de que no hay adquisición en curso
+        if self.is_acquiring:
+            messagebox.showwarning("Advertencia", "Detén la adquisición actual antes de hacer el test")
+            return
+        
+        self.debug_log("=== INICIANDO TEST DE COMUNICACIÓN ===")
+        self.debug_log(f"Puerto: {port}, Baudrate: {baud}")
+        
+        ser = None
         try:
-            # Verificar que el puerto COM esté disponible
-            port = self.com_port_var.get().strip()
-            if not port:
-                messagebox.showwarning("Advertencia", "Por favor ingresa un puerto COM válido")
-                return
+            ser = serial.Serial(port, int(baud), timeout=2)
+            self.debug_log("✓ Puerto abierto exitosamente")
             
-            # Conectar al puerto serial
-            self.serial_connection = serial.Serial(
-                port=port,
-                baudrate=int(self.baud_var.get()),
-                timeout=1,
-                bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
-                stopbits=serial.STOPBITS_ONE
-            )
+            # Pequeña pausa para estabilizar
+            time.sleep(1)
             
-            # Esperar a que se establezca la conexión
-            time.sleep(2)
+            # Leer datos disponibles
+            bytes_available = ser.in_waiting
+            self.debug_log(f"Bytes disponibles: {bytes_available}")
+            
+            if bytes_available > 0:
+                data = ser.read(bytes_available)
+                self.debug_log(f"✓ Datos recibidos: {len(data)} bytes")
+                self.debug_log(f"✓ Primeros bytes (hex): {data[:20].hex()}")
+                
+                # Buscar paquetes válidos
+                packets_found = 0
+                for i in range(len(data)):
+                    if data[i] == 0x55 and i + 10 < len(data):
+                        packet_type = data[i + 1]
+                        if packet_type in [0x51, 0x52, 0x53]:
+                            packets_found += 1
+                            if packets_found <= 3:  # Mostrar solo primeros 3
+                                self.debug_log(f"Paquete {packets_found}: Tipo 0x{packet_type:02X}")
+                
+                if packets_found > 0:
+                    self.debug_log(f"✓ Total de paquetes válidos: {packets_found}")
+                else:
+                    self.debug_log("ℹ No se encontraron paquetes válidos 0x55")
+                    
+            else:
+                self.debug_log("ℹ No hay datos inmediatamente disponibles")
+                
+            # Test de escritura (opcional)
+            try:
+                # Comando de lectura básico
+                test_cmd = bytes([0xFF, 0xAA, 0x27, 0x00, 0x00])
+                ser.write(test_cmd)
+                self.debug_log("✓ Comando de test enviado")
+                time.sleep(0.1)
+                
+                # Leer respuesta
+                if ser.in_waiting > 0:
+                    response = ser.read(ser.in_waiting)
+                    self.debug_log(f"✓ Respuesta recibida: {len(response)} bytes")
+                else:
+                    self.debug_log("ℹ No hubo respuesta inmediata al comando")
+                    
+            except Exception as e:
+                self.debug_log(f"ℹ Error en test de escritura: {e}")
+            
+            self.debug_log("✓ TEST COMPLETADO - Puerto funcional")
+            
+        except serial.SerialException as e:
+            self.debug_log(f"✗ ERROR Serial: {str(e)}")
+            messagebox.showerror("Error", f"No se pudo comunicar con el puerto:\n{str(e)}")
+        except Exception as e:
+            self.debug_log(f"✗ ERROR: {str(e)}")
+            messagebox.showerror("Error", f"Error inesperado:\n{str(e)}")
+        finally:
+            # Cerrar siempre la conexión
+            if ser and ser.is_open:
+                try:
+                    ser.close()
+                    self.debug_log("Conexión de test cerrada")
+                except:
+                    pass
+
+    def calibrate_sensor(self):
+        """Calibra el sensor WT9011DCL"""
+        if not self.serial_connection or not self.serial_connection.is_open:
+            messagebox.showwarning("Advertencia", "Conecta el sensor primero")
+            return
+        
+        try:
+            self.debug_log("Iniciando calibración...")
+            # Comando de calibración para WT9011DCL - acelerómetro
+            calibration_cmd = bytes([0xFF, 0xAA, 0x01, 0x00, 0x00])
+            
+            self.serial_connection.write(calibration_cmd)
+            time.sleep(0.1)
+            
+            self.debug_log("Calibración iniciada - Coloca el sensor en superficie plana")
+            messagebox.showinfo("Calibración", 
+                              "Coloca el sensor en superficie plana y espera 5 segundos...")
+            
+            # Esperar calibración
+            self.window.after(5000, self.calibration_complete)
+            
+        except Exception as e:
+            self.debug_log(f"Error en calibración: {str(e)}")
+            messagebox.showerror("Error", f"Error en calibración: {str(e)}")
+
+    def calibration_complete(self):
+        """Se ejecuta cuando termina la calibración"""
+        self.debug_log("Calibración completada")
+        messagebox.showinfo("Calibración", "Calibración completada exitosamente")
+        self.status_label.config(text="Estado: Sensor calibrado", fg="#27AE60")
+
+    def clear_all_data(self):
+        """Borra todos los datos y reinicia la interfaz"""
+        try:
+            # Detener adquisición si está activa
+            if self.is_acquiring:
+                self.stop_acquisition()
+            
+            # Limpiar datos
+            self.raw_data.clear()
+            self.data_buffer.clear()
+            self.raw_bytes_buffer.clear()
+            self.packet_count = 0
+            
+            # Reiniciar contadores
+            self.samples_label.config(text="Muestras: 0")
+            self.packets_label.config(text="Paquetes: 0")
+            self.bytes_label.config(text="Bytes en buffer: 0")
+            self.duration_label.config(text="Duración: 0s")
+            self.accel_values_label.config(text="Acel: X:0.000 Y:0.000 Z:0.000 g")
+            self.gyro_values_label.config(text="Giro: X:0.000 Y:0.000 Z:0.000 °/s")
+            
+            # Limpiar gráficos
+            self.initialize_plots()
+            
+            # Limpiar consola
+            self.debug_text.delete(1.0, tk.END)
+            
+            # Actualizar estado
+            self.status_label.config(text="Estado: Datos borrados", fg="#F39C12")
+            
+            self.debug_log("Todos los datos han sido borrados")
+            
+        except Exception as e:
+            self.debug_log(f"Error borrando datos: {str(e)}")
+            messagebox.showerror("Error", f"No se pudieron borrar los datos: {str(e)}")
+
+    def start_acquisition(self):
+        """Inicia la adquisición de datos con mejor manejo de errores"""
+        port = self.com_port_var.get().strip()
+        
+        if not port:
+            messagebox.showwarning("Advertencia", "Ingresa un puerto COM válido")
+            return
+        
+        try:
+            # Cerrar conexión previa si existe
+            self.stop_acquisition()
+            time.sleep(1)  # Dar tiempo para que se cierre completamente
+            
+            self.debug_log("=== INICIANDO ADQUISICIÓN ===")
+            self.debug_log(f"Conectando a {port} - {self.baud_var.get()} baud")
+            
+            # Crear nueva conexión serial
+            with self.serial_lock:
+                self.serial_connection = serial.Serial(
+                    port=port,
+                    baudrate=int(self.baud_var.get()),
+                    timeout=1,
+                    bytesize=serial.EIGHTBITS,
+                    parity=serial.PARITY_NONE,
+                    stopbits=serial.STOPBITS_ONE
+                )
+            
+            time.sleep(2)  # Esperar a que se establezca la conexión
             
             if self.serial_connection.is_open:
-                # Configurar el sensor WT9011DCL
+                self.debug_log("✓ Puerto abierto exitosamente")
+                
+                # Configurar el sensor
                 self.configure_sensor()
                 
                 # Iniciar variables
                 self.is_acquiring = True
                 self.raw_data = []
                 self.data_buffer.clear()
+                self.raw_bytes_buffer.clear()
                 self.start_time = time.time()
+                self.packet_count = 0
+                self.last_accel_data = {'Ax': 0.0, 'Ay': 0.0, 'Az': 0.0}
+                self.last_gyro_data = {'Gx': 0.0, 'Gy': 0.0, 'Gz': 0.0}
                 
                 # Actualizar interfaz
                 self.start_btn.config(state="disabled")
@@ -1096,88 +1349,247 @@ class ModuleB:
                 # Iniciar actualización de gráficos
                 self.window.after(100, self.update_plots)
                 
-                messagebox.showinfo("Éxito", f"Adquisición iniciada en {port}")
+                self.debug_log("Adquisición iniciada correctamente")
+                
             else:
+                self.debug_log("✗ No se pudo abrir el puerto")
                 messagebox.showerror("Error", f"No se pudo abrir el puerto {port}")
             
         except serial.SerialException as e:
-            messagebox.showerror("Error Serial", f"No se pudo conectar al puerto {self.com_port_var.get()}:\n{str(e)}")
+            error_msg = str(e)
+            if "Access is denied" in error_msg:
+                self.debug_log("✗ ERROR: Puerto ocupado por otra aplicación")
+                messagebox.showerror("Puerto Ocupado", 
+                                   f"El puerto {port} está siendo usado por otra aplicación.\n\n"
+                                   f"Cierra:\n- Arduino IDE\n- Putty\n- Terminal Serial\n- Cualquier otro programa serial")
+            elif "FileNotFoundError" in error_msg:
+                self.debug_log("✗ ERROR: Puerto no encontrado")
+                messagebox.showerror("Puerto No Encontrado", 
+                                   f"No se encontró el puerto {port}.\n\n"
+                                   f"Verifica:\n- Que el sensor esté conectado\n- El puerto COM correcto\n- Los drivers instalados")
+            else:
+                self.debug_log(f"✗ Error Serial: {error_msg}")
+                messagebox.showerror("Error Serial", f"No se pudo conectar al puerto {port}:\n{error_msg}")
             self.stop_acquisition()
         except Exception as e:
+            self.debug_log(f"✗ Error iniciando adquisición: {str(e)}")
             messagebox.showerror("Error", f"No se pudo iniciar la adquisición:\n{str(e)}")
             self.stop_acquisition()
 
     def configure_sensor(self):
         """Configura el sensor WT9011DCL para enviar datos continuamente"""
         try:
-            # Comando para salida continua de datos (consultar manual del WT9011DCL)
-            # Este es un comando genérico - ajustar según el manual específico
-            output_cmd = bytes([0xFF, 0xAA, 0x01, 0x00, 0x00])  # Ejemplo de comando
-            self.serial_connection.write(output_cmd)
-            time.sleep(0.1)
-            print("Sensor configurado para salida continua")
+            self.debug_log("Configurando sensor WT9011DCL...")
+            
+            # Comandos de configuración para WT9011DCL
+            commands = [
+                bytes([0xFF, 0xAA, 0x03, 0x08, 0x00]),  # Output rate 100Hz
+                bytes([0xFF, 0xAA, 0x02, 0x06, 0x00]),  # Acelerómetro + Giroscopio
+                bytes([0xFF, 0xAA, 0x00, 0x00, 0x00]),  # Guardar configuración
+            ]
+            
+            for i, cmd in enumerate(commands):
+                self.serial_connection.write(cmd)
+                self.debug_log(f"Comando {i+1} enviado: {cmd.hex()}")
+                time.sleep(0.2)  # Esperar entre comandos
+                
+                # Leer respuesta si hay
+                if self.serial_connection.in_waiting > 0:
+                    response = self.serial_connection.read(self.serial_connection.in_waiting)
+                    self.debug_log(f"Respuesta {i+1}: {response.hex()}")
+            
+            self.debug_log("Configuración del sensor completada")
+            
+            # Pequeña pausa para que el sensor empiece a enviar datos
+            time.sleep(0.5)
+            
         except Exception as e:
-            print(f"Error en configuración del sensor: {e}")
+            self.debug_log(f"Error en configuración del sensor: {e}")
 
-    def parse_wt9011dcl_data(self, data):
-        """Parsea los datos del sensor WT9011DCL - SIMULACIÓN para pruebas"""
-        # Para pruebas, generamos datos simulados
-        # En producción, reemplazar con el parser real del WT9011DCL
+    def bytes_to_int16(self, high_byte, low_byte):
+        """Convierte 2 bytes a entero de 16 bits con signo"""
+        value = (high_byte << 8) | low_byte
+        if value & 0x8000:  # Verificar signo
+            value = value - 0x10000
+        return value
+
+    def parse_wt9011dcl_packet(self, packet):
+        """Parsea un paquete completo de 11 bytes del WT9011DCL"""
         try:
+            if len(packet) != 11:
+                return None
+            
+            # Verificar cabecera del paquete
+            if packet[0] != 0x55:
+                return None
+            
+            frame_type = packet[1]
             current_time = time.time() - self.start_time
             
-            # Generar datos de acelerómetro simulados
-            ax = 0.1 * np.sin(2 * np.pi * 0.5 * current_time) + np.random.normal(0, 0.01)
-            ay = 0.1 * np.sin(2 * np.pi * 0.3 * current_time + np.pi/2) + np.random.normal(0, 0.01)
-            az = 1.0 + 0.05 * np.sin(2 * np.pi * 0.1 * current_time) + np.random.normal(0, 0.01)
+            # Verificar checksum (último byte)
+            checksum = sum(packet[:10]) & 0xFF
+            if checksum != packet[10]:
+                self.debug_log(f"Checksum error: calculado {checksum:02X}, recibido {packet[10]:02X}")
+                return None
             
-            # Generar datos de giroscopio simulados
-            gx = 10 * np.sin(2 * np.pi * 0.2 * current_time) + np.random.normal(0, 0.1)
-            gy = 15 * np.sin(2 * np.pi * 0.4 * current_time + np.pi/4) + np.random.normal(0, 0.1)
-            gz = 5 * np.sin(2 * np.pi * 0.1 * current_time + np.pi/2) + np.random.normal(0, 0.1)
+            if frame_type == 0x51:  # Frame de acelerómetro
+                # Convertir bytes a valores de 16 bits con signo
+                # Rango: ±16g
+                ax = self.bytes_to_int16(packet[3], packet[2]) / 32768.0 * 16.0
+                ay = self.bytes_to_int16(packet[5], packet[4]) / 32768.0 * 16.0
+                az = self.bytes_to_int16(packet[7], packet[6]) / 32768.0 * 16.0
+                
+                # Actualizar últimos valores
+                self.last_accel_data = {'Ax': ax, 'Ay': ay, 'Az': az}
+                
+                return {
+                    'Ax': ax, 'Ay': ay, 'Az': az,
+                    'Gx': self.last_gyro_data['Gx'], 
+                    'Gy': self.last_gyro_data['Gy'], 
+                    'Gz': self.last_gyro_data['Gz'],
+                    'Timestamp': current_time,
+                    'FrameType': 'Accel'
+                }
+                
+            elif frame_type == 0x52:  # Frame de giroscopio
+                # Convertir bytes a valores de 16 bits con signo
+                # Rango: ±2000°/s
+                gx = self.bytes_to_int16(packet[3], packet[2]) / 32768.0 * 2000.0
+                gy = self.bytes_to_int16(packet[5], packet[4]) / 32768.0 * 2000.0
+                gz = self.bytes_to_int16(packet[7], packet[6]) / 32768.0 * 2000.0
+                
+                # Actualizar últimos valores
+                self.last_gyro_data = {'Gx': gx, 'Gy': gy, 'Gz': gz}
+                
+                return {
+                    'Ax': self.last_accel_data['Ax'],
+                    'Ay': self.last_accel_data['Ay'], 
+                    'Az': self.last_accel_data['Az'],
+                    'Gx': gx, 'Gy': gy, 'Gz': gz,
+                    'Timestamp': current_time,
+                    'FrameType': 'Gyro'
+                }
             
-            return {
-                'Ax': ax, 'Ay': ay, 'Az': az,
-                'Gx': gx, 'Gy': gy, 'Gz': gz,
-                'Timestamp': current_time
-            }
+            elif frame_type == 0x53:  # Frame de ángulos
+                # Ángulos de Euler (opcional)
+                roll = self.bytes_to_int16(packet[3], packet[2]) / 32768.0 * 180.0
+                pitch = self.bytes_to_int16(packet[5], packet[4]) / 32768.0 * 180.0
+                yaw = self.bytes_to_int16(packet[7], packet[6]) / 32768.0 * 180.0
+                
+                return {
+                    'Roll': roll, 'Pitch': pitch, 'Yaw': yaw,
+                    'Timestamp': current_time,
+                    'FrameType': 'Angle'
+                }
+            else:
+                self.debug_log(f"Tipo de paquete desconocido: 0x{frame_type:02X}")
+            
+            return None
             
         except Exception as e:
-            print(f"Error generando datos simulados: {e}")
+            self.debug_log(f"Error parsing WT9011DCL packet: {e}")
             return None
 
     def acquisition_loop(self):
-        """Bucle principal de adquisición de datos - MODIFICADO PARA PRUEBAS"""
-        print("Iniciando bucle de adquisición...")
+        """Bucle principal de adquisición de datos - CORREGIDO"""
+        self.debug_log("Iniciando bucle de adquisición...")
+        
+        last_log_time = time.time()
+        error_count = 0
+        max_errors = 5
         
         while self.is_acquiring:
             try:
-                # Para pruebas, generamos datos simulados
-                # En producción, leer desde el puerto serial
+                # Verificar si la conexión serial sigue activa
+                if not self.serial_connection or not self.serial_connection.is_open:
+                    self.debug_log("Conexión serial perdida, deteniendo adquisición...")
+                    self.window.after(0, self.stop_acquisition)
+                    break
                 
-                if self.serial_connection and self.serial_connection.in_waiting > 0:
-                    # Leer datos reales del sensor
-                    data = self.serial_connection.read(self.serial_connection.in_waiting)
-                    # Aquí iría el parsing real de los datos
-                    # parsed_data = self.parse_real_wt9011dcl_data(data)
-                    pass
-                else:
-                    # Generar datos simulados para pruebas
-                    parsed_data = self.parse_wt9011dcl_data(None)
+                # Leer datos disponibles de manera segura
+                def read_available():
+                    return self.serial_connection.in_waiting if self.serial_connection else 0
                 
-                if parsed_data:
-                    # Guardar en buffer y datos crudos
-                    self.data_buffer.append(parsed_data)
-                    self.raw_data.append(parsed_data)
+                bytes_available = self.safe_serial_operation(read_available)
+                
+                if bytes_available and bytes_available > 0:
+                    # Leer datos de manera segura
+                    def read_data():
+                        return self.serial_connection.read(bytes_available)
                     
-                    # Actualizar contadores en el hilo principal
-                    self.window.after(0, self.update_counters)
-                
-                time.sleep(0.01)  # 10ms de intervalo para simular 100Hz
-                
+                    new_data = self.safe_serial_operation(read_data)
+                    
+                    if new_data:
+                        self.raw_bytes_buffer.extend(new_data)
+                        error_count = 0  # Reset error count on successful read
+                        
+                        # Procesar paquetes completos
+                        packets_processed = self.process_data_buffer()
+                        
+                        # Log cada 5 segundos
+                        current_time = time.time()
+                        if current_time - last_log_time > 5 and packets_processed > 0:
+                            self.debug_log(f"Procesados {packets_processed} paquetes en los últimos 5s")
+                            last_log_time = current_time
+                else:
+                    # Pequeña pausa si no hay datos
+                    time.sleep(0.001)
+                    
             except Exception as e:
-                print(f"Error en adquisición: {e}")
-                time.sleep(0.1)
+                error_count += 1
+                self.debug_log(f"Error en adquisición ({error_count}/{max_errors}): {e}")
+                
+                if error_count >= max_errors:
+                    self.debug_log("Demasiados errores, deteniendo adquisición...")
+                    self.window.after(0, self.stop_acquisition)
+                    break
+                
+                time.sleep(0.1)  # Pausa más larga en caso de error
+
+    def process_data_buffer(self):
+        """Procesa el buffer de datos buscando paquetes válidos"""
+        packets_processed = 0
+        
+        while len(self.raw_bytes_buffer) >= 11 and self.is_acquiring:
+            # Buscar cabecera 0x55 desde el inicio
+            if self.raw_bytes_buffer[0] != 0x55:
+                # Buscar siguiente cabecera en el buffer
+                found_header = False
+                for i in range(1, min(len(self.raw_bytes_buffer), 100)):  # Buscar en primeros 100 bytes
+                    if self.raw_bytes_buffer[i] == 0x55:
+                        # Encontramos cabecera, eliminar bytes basura anteriores
+                        discarded = len(self.raw_bytes_buffer[:i])
+                        self.raw_bytes_buffer = self.raw_bytes_buffer[i:]
+                        if discarded > 0:
+                            self.debug_log(f"Descartados {discarded} bytes basura")
+                        found_header = True
+                        break
+                
+                if not found_header:
+                    # No se encontró cabecera, limpiar buffer
+                    if len(self.raw_bytes_buffer) > 100:
+                        self.debug_log(f"Buffer lleno de basura ({len(self.raw_bytes_buffer)} bytes), limpiando...")
+                    self.raw_bytes_buffer.clear()
+                continue
+            
+            # Extraer paquete completo de 11 bytes
+            packet = bytes(self.raw_bytes_buffer[:11])
+            parsed_data = self.parse_wt9011dcl_packet(packet)
+            
+            if parsed_data:
+                self.data_buffer.append(parsed_data)
+                self.raw_data.append(parsed_data)
+                self.packet_count += 1
+                
+                # Actualizar UI en el hilo principal
+                self.window.after(0, self.update_counters)
+                self.window.after(0, self.update_current_values, parsed_data)
+            
+            # Remover paquete procesado del buffer
+            self.raw_bytes_buffer = self.raw_bytes_buffer[11:]
+            packets_processed += 1
+        
+        return packets_processed
 
     def update_counters(self):
         """Actualiza los contadores en la interfaz"""
@@ -1185,109 +1597,178 @@ class ModuleB:
         duration = time.time() - self.start_time if self.start_time else 0
         
         self.samples_label.config(text=f"Muestras: {samples}")
+        self.packets_label.config(text=f"Paquetes: {self.packet_count}")
+        self.bytes_label.config(text=f"Bytes en buffer: {len(self.raw_bytes_buffer)}")
         self.duration_label.config(text=f"Duración: {duration:.1f}s")
+
+    def update_current_values(self, data):
+        """Actualiza los valores actuales en la interfaz"""
+        try:
+            if data['FrameType'] == 'Accel':
+                self.accel_values_label.config(
+                    text=f"Acel: X:{data['Ax']:6.3f} Y:{data['Ay']:6.3f} Z:{data['Az']:6.3f} g"
+                )
+            elif data['FrameType'] == 'Gyro':
+                self.gyro_values_label.config(
+                    text=f"Giro: X:{data['Gx']:6.3f} Y:{data['Gy']:6.3f} Z:{data['Gz']:6.3f} °/s"
+                )
+                
+            # Actualizar estado con información del tipo de paquete
+            self.status_label.config(text=f"Estado: Recibiendo {data['FrameType']}...", fg="#2ECC71")
+            
+        except Exception as e:
+            self.debug_log(f"Error actualizando valores: {e}")
 
     def update_plots(self):
         """Actualiza los gráficos en tiempo real"""
         if not self.is_acquiring:
-            # Si no está adquiriendo, programar próxima verificación
-            self.window.after(1000, self.update_plots)
+            self.window.after(100, self.update_plots)
             return
         
         try:
-            if self.data_buffer:
-                # Extraer datos del buffer
-                times = [d['Timestamp'] for d in self.data_buffer]
+            # Usar datos combinados para los gráficos
+            combined_data = self.combine_sensor_data()
+            
+            if combined_data:
+                times = [d['Timestamp'] for d in combined_data]
                 
-                # Actualizar acelerómetro según selección
+                # Actualizar acelerómetro
                 for axis in ['Ax', 'Ay', 'Az']:
                     if self.accel_vars[axis].get():
-                        values = [d[axis] for d in self.data_buffer]
+                        values = [d[axis] for d in combined_data]
                         self.accel_lines[axis].set_data(times, values)
                     else:
                         self.accel_lines[axis].set_data([], [])
                 
-                # Actualizar giroscopio según selección
+                # Actualizar giroscopio
                 for axis in ['Gx', 'Gy', 'Gz']:
                     if self.gyro_vars[axis].get():
-                        values = [d[axis] for d in self.data_buffer]
+                        values = [d[axis] for d in combined_data]
                         self.gyro_lines[axis].set_data(times, values)
                     else:
                         self.gyro_lines[axis].set_data([], [])
                 
-                # Ajustar límites del tiempo (ventana deslizante de 10 segundos)
+                # Ajustar límites de tiempo
                 if times:
                     current_time = times[-1]
-                    time_window = 10  # segundos
+                    time_window = 10  # Mostrar últimos 10 segundos
                     start_time = max(0, current_time - time_window)
                     
                     self.ax_accel.set_xlim(start_time, current_time)
                     self.ax_gyro.set_xlim(start_time, current_time)
                     
-                    # Autoajustar límites Y basado en los datos visibles
-                    self.auto_adjust_y_limits()
-            
-            # Redibujar
-            self.canvas.draw_idle()
+                    # Autoajustar límites Y
+                    self.auto_adjust_y_limits(combined_data)
+                
+                # Redibujar
+                self.canvas.draw_idle()
             
         except Exception as e:
-            print(f"Error actualizando gráficos: {e}")
+            self.debug_log(f"Error actualizando gráficos: {e}")
         
         # Programar próxima actualización
-        self.window.after(100, self.update_plots)  # Actualizar cada 100ms
+        self.window.after(100, self.update_plots)
 
-    def auto_adjust_y_limits(self):
-        """Autoajusta los límites Y de los gráficos basado en los datos visibles"""
+    def combine_sensor_data(self):
+        """Combina datos de acelerómetro y giroscopio para visualización"""
         try:
-            # Para acelerómetro
-            if self.data_buffer:
-                visible_accel_data = []
-                for axis in ['Ax', 'Ay', 'Az']:
-                    if self.accel_vars[axis].get():
-                        values = [d[axis] for d in self.data_buffer]
-                        visible_accel_data.extend(values)
+            if not self.data_buffer:
+                return []
+            
+            # Usar los datos más recientes del buffer
+            recent_data = list(self.data_buffer)[-100:]  # Últimos 100 puntos
+            
+            # Para WT9011DCL, cada paquete ya contiene datos combinados
+            # gracias a last_accel_data y last_gyro_data
+            valid_data = []
+            for data in recent_data:
+                # Solo incluir datos que tengan valores significativos
+                has_accel = any(abs(data.get(axis, 0)) > 0.001 for axis in ['Ax', 'Ay', 'Az'])
+                has_gyro = any(abs(data.get(axis, 0)) > 0.1 for axis in ['Gx', 'Gy', 'Gz'])
                 
-                if visible_accel_data:
-                    min_val = min(visible_accel_data)
-                    max_val = max(visible_accel_data)
-                    margin = (max_val - min_val) * 0.1
-                    self.ax_accel.set_ylim(min_val - margin, max_val + margin)
-                
-                # Para giroscopio
-                visible_gyro_data = []
-                for axis in ['Gx', 'Gy', 'Gz']:
-                    if self.gyro_vars[axis].get():
-                        values = [d[axis] for d in self.data_buffer]
-                        visible_gyro_data.extend(values)
-                
-                if visible_gyro_data:
-                    min_val = min(visible_gyro_data)
-                    max_val = max(visible_gyro_data)
-                    margin = (max_val - min_val) * 0.1
-                    self.ax_gyro.set_ylim(min_val - margin, max_val + margin)
-                    
+                if has_accel or has_gyro:
+                    valid_data.append(data)
+            
+            return valid_data
+            
         except Exception as e:
-            print(f"Error autoajustando límites Y: {e}")
+            self.debug_log(f"Error combinando datos: {e}")
+            return []
+
+    def auto_adjust_y_limits(self, data):
+        """Autoajusta los límites Y de los gráficos"""
+        try:
+            if not data:
+                return
+                
+            # Para acelerómetro
+            accel_data = []
+            for axis in ['Ax', 'Ay', 'Az']:
+                if self.accel_vars[axis].get():
+                    values = [d[axis] for d in data]
+                    accel_data.extend(values)
+            
+            if accel_data:
+                min_val = min(accel_data)
+                max_val = max(accel_data)
+                margin = max(0.5, (max_val - min_val) * 0.1)
+                self.ax_accel.set_ylim(min_val - margin, max_val + margin)
+            
+            # Para giroscopio
+            gyro_data = []
+            for axis in ['Gx', 'Gy', 'Gz']:
+                if self.gyro_vars[axis].get():
+                    values = [d[axis] for d in data]
+                    gyro_data.extend(values)
+            
+            if gyro_data:
+                min_val = min(gyro_data)
+                max_val = max(gyro_data)
+                margin = max(10.0, (max_val - min_val) * 0.1)
+                self.ax_gyro.set_ylim(min_val - margin, max_val + margin)
+                
+        except Exception as e:
+            self.debug_log(f"Error autoajustando límites Y: {e}")
 
     def stop_acquisition(self):
-        """Detiene la adquisición de datos"""
+        """Detiene la adquisición de datos de manera segura"""
         self.is_acquiring = False
         
-        # Cerrar conexión serial
-        if self.serial_connection and self.serial_connection.is_open:
+        # Esperar a que el hilo de adquisición termine
+        if hasattr(self, 'acquisition_thread') and self.acquisition_thread.is_alive():
+            self.debug_log("Esperando que el hilo de adquisición termine...")
+            self.acquisition_thread.join(timeout=2.0)
+        
+        # Cerrar conexión serial de manera segura
+        if self.serial_connection:
             try:
-                self.serial_connection.close()
-            except:
-                pass
+                with self.serial_lock:
+                    if self.serial_connection.is_open:
+                        self.serial_connection.close()
+                        self.debug_log("Conexión serial cerrada correctamente")
+            except Exception as e:
+                self.debug_log(f"Error cerrando conexión serial: {e}")
+            finally:
+                self.serial_connection = None
+        
+        # Limpiar buffer
+        self.raw_bytes_buffer.clear()
         
         # Actualizar interfaz
+        self.window.after(0, self._update_ui_after_stop)
+
+    def _update_ui_after_stop(self):
+        """Actualiza la UI después de detener la adquisición"""
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.status_label.config(text="Estado: Adquisición detenida", fg="#F1C40F")
         
         if self.raw_data:
-            messagebox.showinfo("Información", f"Adquisición detenida. Se capturaron {len(self.raw_data)} muestras.")
+            samples = len(self.raw_data)
+            self.debug_log(f"Adquisición detenida - {samples} muestras capturadas")
+            messagebox.showinfo("Información", f"Adquisición detenida. Se capturaron {samples} muestras.")
         else:
+            self.debug_log("Adquisición detenida - No se capturaron datos")
             messagebox.showinfo("Información", "Adquisición detenida.")
 
     def save_raw_data(self):
@@ -1316,11 +1797,15 @@ class ModuleB:
             # Guardar como MAT
             mat_filename = os.path.join(data_dir, f"{base_filename}.mat")
             mat_data = {
-                'accel_data': df[['Ax', 'Ay', 'Az']].values,
-                'gyro_data': df[['Gx', 'Gy', 'Gz']].values,
+                'sensor_data': df.to_dict('list'),
                 'timestamp': df['Timestamp'].values,
                 'sampling_rate': self.sampling_rate,
-                'columns': ['Ax', 'Ay', 'Az', 'Gx', 'Gy', 'Gz', 'Timestamp']
+                'sensor_info': {
+                    'model': 'WT9011DCL',
+                    'accel_range': '±16g',
+                    'gyro_range': '±2000°/s',
+                    'output_rate': '100Hz'
+                }
             }
             sio.savemat(mat_filename, mat_data)
             
@@ -1332,12 +1817,15 @@ class ModuleB:
                 f.write(f"Fecha de adquisición: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"Total de muestras: {len(self.raw_data)}\n")
                 f.write(f"Duración: {df['Timestamp'].iloc[-1] if len(df) > 0 else 0:.2f} segundos\n")
-                f.write(f"Tasa de muestreo aproximada: {self.sampling_rate} Hz\n")
+                f.write(f"Tasa de muestreo: {self.sampling_rate} Hz\n")
                 f.write(f"Puerto COM: {self.com_port_var.get()}\n")
-                f.write(f"Baud rate: {self.baud_var.get()}\n\n")
+                f.write(f"Baud rate: {self.baud_var.get()}\n")
+                f.write(f"Rango acelerómetro: ±16g\n")
+                f.write(f"Rango giroscopio: ±2000°/s\n\n")
                 f.write("ESTADÍSTICAS:\n")
                 f.write(df.describe().to_string())
             
+            self.debug_log(f"Datos guardados en: {csv_filename}")
             messagebox.showinfo("Éxito", 
                               f"Datos guardados exitosamente en:\n"
                               f"• {csv_filename}\n"
@@ -1345,12 +1833,17 @@ class ModuleB:
                               f"• {info_filename}")
             
         except Exception as e:
+            self.debug_log(f"Error guardando datos: {str(e)}")
             messagebox.showerror("Error", f"No se pudieron guardar los datos:\n{str(e)}")
 
     def __del__(self):
-        """Destructor para asegurar que se cierre la conexión serial"""
-        self.stop_acquisition()
-# Bloque principal de ejecución
+        """Destructor mejorado"""
+        try:
+            self.stop_acquisition()
+        except:
+            pass
+
+#----------------------------------------------------------
 if __name__ == "__main__":
     root = tk.Tk()
     app = MainWindow(root)
