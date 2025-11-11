@@ -10,13 +10,17 @@ import threading
 import time
 from scipy import signal
 from scipy.stats import entropy
+import scipy.io as sio
+from pipeline_module import DataPipeline  # ← Pipeline externo
+
+
 
 
 class MainWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("Sistema de Procesamiento de Señales IMU")
-        self.root.geometry("800x600")
+        self.root.geometry("900x700")
         self.root.configure(bg="#2C3E50")
         
         # Frame principal
@@ -25,7 +29,7 @@ class MainWindow:
         
         # Logo (placeholder - puedes reemplazar con tu imagen)
         logo_frame = tk.Frame(main_frame, bg="#314457")
-        logo_frame.pack(pady=20)
+        logo_frame.pack(pady=15)
         
         try:
             # Intenta cargar un logo si existe
@@ -81,7 +85,7 @@ class MainWindow:
         btn_modulo_b = tk.Button(button_frame,
                                 text=" MÓDULO B\nAdquisición en Vivo",
                                 font=("Arial", 14, "bold"),
-                                bg="#C52DCA", fg="white",
+                                bg="#D348D8", fg="white",
                                 activebackground="#DA2DAE",
                                 width=25, height=4,
                                 cursor="hand2",
@@ -109,272 +113,332 @@ class ModuleA:
         self.window = window
         self.window.title("Módulo A - Cargar y Procesar Archivo")
         self.window.geometry("1600x900")
-        self.window.configure(bg="#ECF0F1")
-        
+        self.window.configure(bg="#144855")
         self.data = None
-        self.filtered_data = None
-        self.features = None
-        self.predictions = None
-        self.sampling_rate = 200  # Hz
-        
+        self.sampling_rate = 200  # Definido para evitar errores
+        # self.pipeline = DataPipeline(sampling_rate=200)  # Comentado ya que no está disponible
+
         # Header
-        header = tk.Frame(window, bg="#3498DB", height=80)
+        header = tk.Frame(window, bg="#5634F1", height=80)
         header.pack(fill="x")
-        
-        title = tk.Label(header, text="📁 MÓDULO A: Cargar y Procesar Archivo",
-                        font=("Arial", 20, "bold"), bg="#3498DB", fg="white")
+        title = tk.Label(header, text="MÓDULO A: Cargar y Procesar Archivo",
+                         font=("Arial", 20, "bold"), bg="#5C22E2", fg="white")
         title.pack(pady=25)
-        
+
         # Main container
-        main_container = tk.Frame(window, bg="#ECF0F1")
+        main_container = tk.Frame(window, bg="#1A6072")
         main_container.pack(fill="both", expand=True, padx=10, pady=10)
-        
-        # Left side - Control and Tables
-        left_frame = tk.Frame(main_container, bg="#ECF0F1")
+
+        # Left section
+        left_frame = tk.Frame(main_container, bg="#17677A")
         left_frame.pack(side="left", fill="both", expand=True, padx=5)
-        
-        # Control Panel
-        control_frame = tk.Frame(left_frame, bg="#ECF0F1")
+
+        # Controls
+        control_frame = tk.Frame(left_frame, bg="#127E99")
         control_frame.pack(fill="x", pady=5)
-        
-        btn_load = tk.Button(control_frame, text="Cargar Archivo CSV/EXCEL/TXT",
-                            font=("Arial", 11), bg="#2ECC71", fg="white",
-                            command=self.load_file, width=22)
-        btn_load.pack(side="left", padx=5)
-        
-        btn_process = tk.Button(control_frame, text="Procesar Datos",
-                               font=("Arial", 11), bg="#E74C3C", fg="white",
-                               command=self.process_data, width=22)
-        btn_process.pack(side="left", padx=5)
-        
+
+        tk.Button(control_frame, text="Cargar Archivo",
+                  font=("Arial", 11), bg="#723FE7", fg="white",
+                  command=self.load_file, width=22).pack(side="left", padx=5)
+        tk.Button(control_frame, text="Procesar Datos",
+                  font=("Arial", 11), bg="#CB3CE7", fg="white",
+                  command=self.process_data, width=22).pack(side="left", padx=5)
+
         self.status_label = tk.Label(control_frame, text="Estado: Esperando archivo...",
                                      font=("Arial", 10), bg="#19444E", fg="white")
         self.status_label.pack(side="left", padx=15)
-        
-        # Notebook para tabs
+
+        # Tabs
         self.notebook = ttk.Notebook(left_frame)
         self.notebook.pack(fill="both", expand=True, pady=5)
-        
-        # Tab 1: Vista de datos crudos
         self.tab_raw = tk.Frame(self.notebook, bg="white")
-        self.notebook.add(self.tab_raw, text="Datos Crudos")
-        
-        # Tab 2: Características
         self.tab_features = tk.Frame(self.notebook, bg="white")
-        self.notebook.add(self.tab_features, text="Características")
-        
-        # Tab 3: Resultados
         self.tab_results = tk.Frame(self.notebook, bg="white")
+        self.notebook.add(self.tab_raw, text="Datos Crudos")
+        self.notebook.add(self.tab_features, text="Características")
         self.notebook.add(self.tab_results, text="Resultados")
-        
+
         self.setup_tabs()
-        
-        # Right side - Graphs
+
+        # Graph area
         right_frame = tk.Frame(main_container, bg="white", width=600)
         right_frame.pack(side="right", fill="both", expand=False, padx=5)
         right_frame.pack_propagate(False)
-        
         self.setup_graphs(right_frame)
-    
+
+    # --- UI Setup ---
+
     def setup_tabs(self):
-        # Tab de datos crudos
         self.raw_text = tk.Text(self.tab_raw, wrap="none", height=20, font=("Courier", 9))
-        raw_scroll_y = tk.Scrollbar(self.tab_raw, command=self.raw_text.yview)
-        raw_scroll_x = tk.Scrollbar(self.tab_raw, orient="horizontal", 
-                                    command=self.raw_text.xview)
-        self.raw_text.configure(yscrollcommand=raw_scroll_y.set,
-                               xscrollcommand=raw_scroll_x.set)
-        
-        raw_scroll_y.pack(side="right", fill="y")
-        raw_scroll_x.pack(side="bottom", fill="x")
         self.raw_text.pack(fill="both", expand=True)
-        
-        # Tab de características
         self.features_text = tk.Text(self.tab_features, wrap="none", height=20, font=("Courier", 9))
-        feat_scroll_y = tk.Scrollbar(self.tab_features, 
-                                     command=self.features_text.yview)
-        feat_scroll_x = tk.Scrollbar(self.tab_features, orient="horizontal",
-                                     command=self.features_text.xview)
-        self.features_text.configure(yscrollcommand=feat_scroll_y.set,
-                                    xscrollcommand=feat_scroll_x.set)
-        
-        feat_scroll_y.pack(side="right", fill="y")
-        feat_scroll_x.pack(side="bottom", fill="x")
         self.features_text.pack(fill="both", expand=True)
-        
-        # Tab de resultados
-        self.results_text = tk.Text(self.tab_results, wrap="word", height=20,
-                                   font=("Courier", 10))
-        results_scroll = tk.Scrollbar(self.tab_results, 
-                                     command=self.results_text.yview)
-        self.results_text.configure(yscrollcommand=results_scroll.set)
-        
-        results_scroll.pack(side="right", fill="y")
+        self.results_text = tk.Text(self.tab_results, wrap="word", height=20, font=("Courier", 10))
         self.results_text.pack(fill="both", expand=True)
-    
+
     def setup_graphs(self, parent):
-        # Frame para las gráficas
-        graph_frame = tk.Frame(parent, bg="white")
-        graph_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Crear figura con dos subplots
         self.fig = Figure(figsize=(8, 10), facecolor='white')
-        
-        # Gráfica 1: Datos crudos
         self.ax1 = self.fig.add_subplot(211)
-        self.ax1.set_title("Acelerómetro - Datos Crudos", fontsize=12, fontweight='bold')
-        self.ax1.set_xlabel("Tiempo (s)", fontsize=10)
-        self.ax1.set_ylabel("Aceleración (g)", fontsize=10)
-        self.ax1.grid(True, alpha=0.3)
-        self.ax1.legend(['Ax', 'Ay', 'Az'], loc='upper right', fontsize=8)
-        
-        # Gráfica 2: Datos filtrados
+        self.ax1.set_title("Datos Crudos", fontsize=10)
         self.ax2 = self.fig.add_subplot(212)
-        self.ax2.set_title("Acelerómetro - Datos Filtrados (Notch 50Hz)", fontsize=12, fontweight='bold')
-        self.ax2.set_xlabel("Tiempo (s)", fontsize=10)
-        self.ax2.set_ylabel("Aceleración (g)", fontsize=10)
-        self.ax2.grid(True, alpha=0.3)
-        self.ax2.legend(['Ax', 'Ay', 'Az'], loc='upper right', fontsize=8)
-        
-        self.fig.tight_layout(pad=3.0)
-        
-        # Canvas para matplotlib
-        self.canvas = FigureCanvasTkAgg(self.fig, graph_frame)
+        self.ax2.set_title("Datos Filtrados", fontsize=10)
+        self.canvas = FigureCanvasTkAgg(self.fig, parent)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
-    
+
+    # --- Funciones principales ---
+
     def load_file(self):
         filename = filedialog.askopenfilename(
             title="Seleccionar archivo",
+            parent=self.window,
             filetypes=[
-                ("Archivos compatibles", "*.csv;*.html;*.xls;*.xlsx;*.txt"),
-                ("Archivos CSV", "*.csv"),
-                ("Archivos HTML", "*.html"),
-                ("Archivos Excel", "*.xls;*.xlsx"),
-                ("Archivos de texto", "*.txt"),
-                ("Todos los archivos", "*.*")
+                ("Archivos compatibles", "*.csv;*.xlsx;*.txt;*.mat"),
+                ("CSV", "*.csv"),
+                ("Excel", "*.xlsx"),
+                ("Texto", "*.txt"),
+                ("MATLAB", "*.mat")
             ]
         )
 
-        if filename:
-            try:
-                # Detectar tipo de archivo
-                if filename.endswith('.csv'):
-                    self.data = pd.read_csv(filename)
-                elif filename.endswith('.html'):
-                    tables = pd.read_html(filename)
-                    if len(tables) > 0:
-                        self.data = tables[0]
-                    else:
-                        raise ValueError("No se encontraron tablas en el archivo HTML")
-                elif filename.endswith(('.xls', '.xlsx')):
-                    self.data = pd.read_excel(filename)
-                elif filename.endswith('.txt'):
-                    # Detectar separador automáticamente (coma, tab, punto y coma)
-                    with open(filename, 'r') as f:
-                        sample = f.read(1024)
-                    if '\t' in sample:
-                        sep = '\t'
-                    elif ';' in sample:
-                        sep = ';'
-                    else:
-                        sep = ','
-                    self.data = pd.read_csv(filename, sep=sep)
+        if not filename:
+            return
+
+        try:
+            if filename.endswith('.csv'):
+                # Leer el archivo CSV con manejo de metadatos
+                with open(filename, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                
+                # Buscar la línea que contiene los encabezados reales
+                data_start_line = 0
+                for i, line in enumerate(lines):
+                    if 'address' in line and 'Time(s)' in line and 'ax(g)' in line:
+                        data_start_line = i
+                        break
+                    elif len(line.split('\t')) >= 7:  # Buscar líneas con suficientes columnas
+                        data_start_line = i
+                        break
+                
+                # Leer los datos saltando las líneas de metadatos
+                self.data = pd.read_csv(filename, 
+                                      skiprows=data_start_line, 
+                                      sep='\t',
+                                      encoding='utf-8')
+                
+                # Limpiar nombres de columnas
+                self.data.columns = self.data.columns.str.strip()
+                
+                # Estandarizar nombres de columnas
+                self.standardize_columns()
+
+            elif filename.endswith('.xlsx'):
+                # Para Excel, leer todo y luego buscar dónde empiezan los datos
+                raw_data = pd.read_excel(filename, header=None)
+                
+                # Buscar la fila que contiene los encabezados
+                header_row = 0
+                for i, row in raw_data.iterrows():
+                    if any('ax(g)' in str(cell) for cell in row.values):
+                        header_row = i
+                        break
+                    elif any('address' in str(cell) for cell in row.values):
+                        header_row = i
+                        break
+                
+                # Leer nuevamente con la fila correcta como encabezado
+                self.data = pd.read_excel(filename, header=header_row)
+                
+                # Limpiar nombres de columnas
+                self.data.columns = self.data.columns.str.strip()
+                
+                # Estandarizar nombres de columnas
+                self.standardize_columns()
+
+            elif filename.endswith('.txt'):
+                self.data = pd.read_csv(filename, sep='\t', engine='python')
+                self.standardize_columns()
+            elif filename.endswith('.mat'):
+                mat_data = sio.loadmat(filename)
+                keys = [k for k in mat_data.keys() if not k.startswith("__")]
+                if len(keys) == 1:
+                    raw = mat_data[keys[0]]
                 else:
-                    raise ValueError("Formato de archivo no compatible")
+                    raw = next((mat_data[k] for k in keys if isinstance(mat_data[k], np.ndarray)), None)
+                if raw is None:
+                    raise ValueError("No se encontró matriz de datos válida en el archivo .mat")
+                self.data = pd.DataFrame(raw, columns=['Ax', 'Ay', 'Az', 'Gx', 'Gy', 'Gz'])
 
-                # Verificar columnas necesarias
-                required_cols = ['Ax', 'Ay', 'Az', 'Gx', 'Gy', 'Gz']
-                if not all(col in self.data.columns for col in required_cols):
-                    messagebox.showwarning(
-                        "Advertencia",
-                        f"El archivo debe contener las columnas: {', '.join(required_cols)}"
-                    )
-                    return
+            # Limpiar datos (eliminar filas con NaN)
+            self.data = self.data.dropna()
 
-                # Mostrar datos crudos
-                self.raw_text.delete(1.0, tk.END)
-                self.raw_text.insert(1.0, self.data.head(100).to_string())
+            # Mostrar información del archivo cargado
+            self.raw_text.delete(1.0, tk.END)
+            self.raw_text.insert(1.0, f"Archivo: {filename}\n")
+            self.raw_text.insert(tk.END, f"Columnas: {', '.join(self.data.columns)}\n")
+            self.raw_text.insert(tk.END, f"Total de muestras: {len(self.data)}\n\n")
+            self.raw_text.insert(tk.END, "Primeras 200 filas:\n")
+            self.raw_text.insert(tk.END, self.data.head(200).to_string())
+            
+            self.plot_raw_data()
+            self.status_label.config(text=f"Archivo cargado ({len(self.data)} muestras)")
+            messagebox.showinfo("Éxito", "Archivo cargado correctamente", parent=self.window)
 
-                # Graficar datos crudos
-                self.plot_raw_data()
+        except Exception as e:
+            messagebox.showerror("Error", f"No se pudo leer el archivo:\n{str(e)}", parent=self.window)
 
-                self.status_label.config(
-                    text=f"Estado: Archivo cargado - {len(self.data)} muestras"
-                )
-                messagebox.showinfo("Éxito", "Archivo cargado correctamente")
-
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al cargar archivo:\n{str(e)}")
+    def standardize_columns(self):
+        """Estandariza los nombres de columnas para el procesamiento"""
+        if self.data is None:
+            return
+            
+        # Mapeo de nombres de columnas esperados
+        column_mapping = {
+            'Ax': ['ax(g)', 'ax', 'aceleracion_x', 'acel_x'],
+            'Ay': ['ay(g)', 'ay', 'aceleracion_y', 'acel_y'], 
+            'Az': ['az(g)', 'az', 'aceleracion_z', 'acel_z'],
+            'Gx': ['wx(deg/s)', 'wx', 'giroscopio_x', 'gyro_x'],
+            'Gy': ['wy(deg/s)', 'wy', 'giroscopio_y', 'gyro_y'],
+            'Gz': ['wz(deg/s)', 'wz', 'giroscopio_z', 'gyro_z']
+        }
+        
+        available_columns = self.data.columns.tolist()
+        renamed_columns = {}
+        
+        # Buscar coincidencias para cada columna esperada
+        for new_name, possible_names in column_mapping.items():
+            for possible_name in possible_names:
+                if possible_name in available_columns:
+                    renamed_columns[possible_name] = new_name
+                    break
+        
+        # Renombrar las columnas que encontramos
+        if renamed_columns:
+            self.data = self.data.rename(columns=renamed_columns)
+            print(f"Columnas renombradas: {renamed_columns}")
+        
+        # Verificar que tenemos las columnas mínimas requeridas
+        required_columns = ['Ax', 'Ay', 'Az']
+        missing_columns = [col for col in required_columns if col not in self.data.columns]
+        
+        if missing_columns:
+            available_cols = ", ".join(self.data.columns)
+            raise ValueError(f"Faltan columnas requeridas: {missing_columns}\nColumnas disponibles: {available_cols}")
 
     def plot_raw_data(self):
-        """Grafica los datos crudos del acelerómetro"""
-        if self.data is not None:
-            time_vector = np.arange(len(self.data)) / self.sampling_rate
-            
-            self.ax1.clear()
-            self.ax1.plot(time_vector, self.data['Ax'], 'r-', label='Ax', linewidth=0.8)
-            self.ax1.plot(time_vector, self.data['Ay'], 'g-', label='Ay', linewidth=0.8)
-            self.ax1.plot(time_vector, self.data['Az'], 'b-', label='Az', linewidth=0.8)
-            self.ax1.set_title("Acelerómetro - Datos Crudos", fontsize=12, fontweight='bold')
-            self.ax1.set_xlabel("Tiempo (s)", fontsize=10)
-            self.ax1.set_ylabel("Aceleración (g)", fontsize=10)
-            self.ax1.grid(True, alpha=0.3)
-            self.ax1.legend(loc='upper right', fontsize=8)
-            
-            self.canvas.draw()
-    
-    def plot_filtered_data(self):
-        """Grafica los datos filtrados del acelerómetro"""
-        if self.filtered_data is not None:
-            time_vector = np.arange(len(self.filtered_data)) / self.sampling_rate
-            
-            self.ax2.clear()
-            self.ax2.plot(time_vector, self.filtered_data['Ax'], 'r-', label='Ax', linewidth=0.8)
-            self.ax2.plot(time_vector, self.filtered_data['Ay'], 'g-', label='Ay', linewidth=0.8)
-            self.ax2.plot(time_vector, self.filtered_data['Az'], 'b-', label='Az', linewidth=0.8)
-            self.ax2.set_title("Acelerómetro - Datos Filtrados (Notch 50Hz)", fontsize=12, fontweight='bold')
-            self.ax2.set_xlabel("Tiempo (s)", fontsize=10)
-            self.ax2.set_ylabel("Aceleración (g)", fontsize=10)
-            self.ax2.grid(True, alpha=0.3)
-            self.ax2.legend(loc='upper right', fontsize=8)
-            
-            self.canvas.draw()
-    
-    def process_data(self):
         if self.data is None:
-            messagebox.showwarning("Advertencia", "Primero debes cargar un archivo")
             return
         
+        # Crear vector de tiempo basado en la frecuencia de muestreo
+        time = np.arange(len(self.data)) / self.sampling_rate
+        
+        self.ax1.clear()
+        
+        # Graficar datos de aceleración
+        if 'Ax' in self.data.columns and 'Ay' in self.data.columns and 'Az' in self.data.columns:
+            self.ax1.plot(time, self.data['Ax'], label='Ax', linewidth=1)
+            self.ax1.plot(time, self.data['Ay'], label='Ay', linewidth=1)
+            self.ax1.plot(time, self.data['Az'], label='Az', linewidth=1)
+            self.ax1.legend()
+            self.ax1.set_xlabel("Tiempo (s)")
+            self.ax1.set_ylabel("Aceleración (g)")
+            self.ax1.set_title("Datos Crudos de Aceleración")
+        else:
+            # Si no tenemos las columnas estandarizadas, graficar las primeras columnas numéricas
+            numeric_columns = self.data.select_dtypes(include=[np.number]).columns.tolist()
+            for i, col in enumerate(numeric_columns[:3]):  # Tomar máximo 3 columnas
+                self.ax1.plot(time, self.data[col], label=col, linewidth=1)
+            self.ax1.legend()
+            self.ax1.set_xlabel("Tiempo (s)")
+            self.ax1.set_ylabel("Valor")
+            self.ax1.set_title("Datos Crudos (primeras 3 columnas numéricas)")
+
+        self.canvas.draw()
+
+    def process_data(self):
+        if self.data is None:
+            messagebox.showwarning("Advertencia", "Carga un archivo antes de procesar", parent=self.window)
+            return
+        
+        self.status_label.config(text="Procesando...")
+        self.window.update()
+        
         try:
-            self.status_label.config(text="Estado: Procesando...")
-            self.window.update()
+            # Verificar que tenemos las columnas necesarias
+            required_columns = ['Ax', 'Ay', 'Az']
+            missing_columns = [col for col in required_columns if col not in self.data.columns]
             
-            # 1. Aplicar filtro Notch de 50 Hz
-            self.filtered_data = self.apply_notch_filter(self.data)
-            self.plot_filtered_data()
+            if missing_columns:
+                raise ValueError(f"Faltan columnas necesarias: {missing_columns}\nColumnas disponibles: {list(self.data.columns)}")
             
-            # 2. Segmentación en ventanas de 50 muestras (0.25s a 200Hz)
-            windows = self.segment_windows(self.filtered_data, window_size=50)
-            
-            # 3. Extracción de características
-            self.features = self.extract_features(windows)
-            
-            # 4. Clasificación basada en máximos y mínimos
-            self.predictions = self.classify(self.features)
-            
-            # Mostrar características
-            self.display_features()
+            print(f"Columnas disponibles para procesamiento: {list(self.data.columns)}")
+            print(f"Primeras filas:\n{self.data.head()}")
+
+            # Procesamiento básico
+            results = self.run_basic_pipeline(self.data)
             
             # Mostrar resultados
-            self.show_results()
+            self.features_text.delete(1.0, tk.END)
+            self.features_text.insert(1.0, results['features'].to_string())
             
-            self.status_label.config(text="Estado: Procesamiento completado")
-            messagebox.showinfo("Éxito", "Datos procesados correctamente")
+            self.results_text.delete(1.0, tk.END)
+            self.results_text.insert(1.0, results['summary'])
+            
+            # Graficar datos filtrados
+            self.ax2.clear()
+            filtered_data = results['filtered']
+            time_filtered = np.arange(len(filtered_data)) / self.sampling_rate
+            
+            self.ax2.plot(time_filtered, filtered_data['Ax'], label='Ax', linewidth=1)
+            self.ax2.plot(time_filtered, filtered_data['Ay'], label='Ay', linewidth=1)
+            self.ax2.plot(time_filtered, filtered_data['Az'], label='Az', linewidth=1)
+            self.ax2.legend()
+            self.ax2.set_xlabel("Tiempo (s)")
+            self.ax2.set_ylabel("Aceleración (g)")
+            self.ax2.set_title("Datos Filtrados")
+            
+            self.canvas.draw()
+            self.status_label.config(text="Procesamiento completado")
             
         except Exception as e:
-            messagebox.showerror("Error", f"Error en el procesamiento:\n{str(e)}")
-            self.status_label.config(text="Estado: Error en procesamiento")
-    
+            error_msg = f"Error durante el procesamiento:\n{str(e)}\n\nColumnas disponibles: {list(self.data.columns) if self.data is not None else 'No data'}"
+            messagebox.showerror("Error", error_msg, parent=self.window)
+            self.status_label.config(text="Error en procesamiento")
+            print(f"Error detallado: {e}")
+
+    def run_basic_pipeline(self, data):
+        """Función básica de procesamiento para reemplazar el pipeline externo"""
+        # Aplicar filtro notch
+        filtered_data = self.apply_notch_filter(data)
+        
+        # Segmentar en ventanas
+        windows = self.segment_windows(filtered_data)
+        
+        # Extraer características
+        features = self.extract_features(windows)
+        
+        # Clasificar
+        predictions = self.classify(features)
+        features['Prediccion'] = predictions
+        
+        # Crear resumen
+        unique, counts = np.unique(predictions, return_counts=True)
+        pred_dict = dict(zip(unique, counts))
+        
+        summary = f"RESUMEN DEL PROCESAMIENTO\n"
+        summary += f"Ventanas procesadas: {len(windows)}\n"
+        summary += f"Muestras totales: {len(data)}\n"
+        summary += f"Tasa de muestreo: {self.sampling_rate} Hz\n\n"
+        summary += "DISTRIBUCIÓN DE CLASES:\n"
+        for clase, count in pred_dict.items():
+            percentage = (count / len(predictions)) * 100
+            summary += f"{clase}: {count} ventanas ({percentage:.1f}%)\n"
+        
+        return {
+            'filtered': filtered_data,
+            'features': features,
+            'summary': summary
+        }
+
     def apply_notch_filter(self, data):
         """Aplica filtro Notch de 50 Hz a todas las señales"""
         filtered_data = data.copy()
@@ -386,8 +450,8 @@ class ModuleA:
         # Diseñar filtro notch
         b, a = signal.iirnotch(notch_freq, quality_factor, self.sampling_rate)
         
-        # Aplicar filtro a cada eje
-        for col in ['Ax', 'Ay', 'Az', 'Gx', 'Gy', 'Gz']:
+        # Aplicar filtro a cada eje de aceleración
+        for col in ['Ax', 'Ay', 'Az']:
             if col in filtered_data.columns:
                 filtered_data[col] = signal.filtfilt(b, a, filtered_data[col])
         
@@ -411,15 +475,11 @@ class ModuleA:
         features_list = []
         
         for idx, window in enumerate(windows):
-            # Extraer datos de cada eje
+            # Extraer datos de cada eje (solo aceleración si no hay giroscopio)
             ax = window['Ax'].values
             ay = window['Ay'].values
             az = window['Az'].values
-            gx = window['Gx'].values
-            gy = window['Gy'].values
-            gz = window['Gz'].values
             
-            # Calcular características
             features = {
                 'Ventana': idx + 1,
                 # Media
@@ -427,14 +487,17 @@ class ModuleA:
                 'Media_Ay': np.mean(ay),
                 'Media_Az': np.mean(az),
                 
-                # RMS en Ax
+                # RMS
                 'RMS_Ax': np.sqrt(np.mean(ax**2)),
+                'RMS_Ay': np.sqrt(np.mean(ay**2)),
+                'RMS_Az': np.sqrt(np.mean(az**2)),
                 
-                # Varianza en Ay y Gy
+                # Varianza
+                'Varianza_Ax': np.var(ax),
                 'Varianza_Ay': np.var(ay),
-                'Varianza_Gy': np.var(gy),
+                'Varianza_Az': np.var(az),
                 
-                # Energía Total (suma de energías de todos los ejes)
+                # Energía Total
                 'Energia_Total': np.sum(ax**2) + np.sum(ay**2) + np.sum(az**2),
                 
                 # Jerk promedio (derivada de la aceleración)
@@ -442,22 +505,35 @@ class ModuleA:
                 'Jerk_Promedio_Ay': np.mean(np.abs(np.diff(ay))),
                 'Jerk_Promedio_Az': np.mean(np.abs(np.diff(az))),
                 
-                # Entropía en Az
+                # Entropía
+                'Entropia_Ax': self.calculate_entropy(ax),
+                'Entropia_Ay': self.calculate_entropy(ay),
                 'Entropia_Az': self.calculate_entropy(az),
                 
-                # Energía rotacional (suma de energías del giroscopio)
-                'Energia_Rotacional': np.sum(gx**2) + np.sum(gy**2) + np.sum(gz**2),
-                
-                # Máximos y Mínimos (para clasificación)
+                # Máximos y Mínimos
                 'Max_Ax': np.max(ax),
                 'Min_Ax': np.min(ax),
                 'Max_Ay': np.max(ay),
                 'Min_Ay': np.min(ay),
                 'Max_Az': np.max(az),
                 'Min_Az': np.min(az),
-                'Max_Gx': np.max(gx),
-                'Min_Gx': np.min(gx),
             }
+            
+            # Agregar características de giroscopio si están disponibles
+            if 'Gx' in window.columns:
+                gx = window['Gx'].values
+                gy = window['Gy'].values
+                gz = window['Gz'].values
+                
+                features.update({
+                    'Media_Gx': np.mean(gx),
+                    'Media_Gy': np.mean(gy),
+                    'Media_Gz': np.mean(gz),
+                    'Varianza_Gy': np.var(gy),
+                    'Energia_Rotacional': np.sum(gx**2) + np.sum(gy**2) + np.sum(gz**2),
+                    'Max_Gx': np.max(gx),
+                    'Min_Gx': np.min(gx),
+                })
             
             features_list.append(features)
         
@@ -465,6 +541,8 @@ class ModuleA:
     
     def calculate_entropy(self, signal_data):
         """Calcula la entropía de una señal"""
+        if len(signal_data) == 0:
+            return 0
         # Discretizar la señal en bins
         hist, _ = np.histogram(signal_data, bins=20, density=True)
         # Normalizar y evitar log(0)
@@ -474,8 +552,7 @@ class ModuleA:
     
     def classify(self, features):
         """
-        Clasifica en 'Saltando' o 'Estático' basado en máximos y mínimos
-        Criterios simples de clasificación
+        Clasifica en 'Saltando' o 'Estático' basado en características
         """
         predictions = []
         
@@ -484,98 +561,21 @@ class ModuleA:
             rango_ax = row['Max_Ax'] - row['Min_Ax']
             rango_ay = row['Max_Ay'] - row['Min_Ay']
             rango_az = row['Max_Az'] - row['Min_Az']
-            rango_gx = row['Max_Gx'] - row['Min_Gx']
             
-            # Criterio de clasificación (puedes ajustar estos umbrales)
-            # Si hay alta variación en aceleración y rotación -> Saltando
-            # Si hay baja variación -> Estático
+            # Criterio de clasificación simplificado
+            # Si hay alta variación en aceleración -> Saltando
+            umbral_variacion = 0.3  # Ajusta este valor según tus datos
             
-            if (rango_ax > 0.5 or rango_ay > 0.5 or rango_az > 1.0) and rango_gx > 50:
+            if (rango_ax > umbral_variacion or 
+                rango_ay > umbral_variacion or 
+                rango_az > umbral_variacion * 2):
                 predictions.append('Saltando')
             else:
                 predictions.append('Estático')
         
         return predictions
-    
-    def display_features(self):
-        """Muestra las características en el tab"""
-        self.features_text.delete(1.0, tk.END)
-        
-        # Mostrar solo las primeras 50 ventanas para no saturar
-        display_features = self.features.head(50)
-        self.features_text.insert(1.0, display_features.to_string(index=False))
-        
-        if len(self.features) > 50:
-            self.features_text.insert(tk.END, f"\n\n... ({len(self.features) - 50} ventanas más)")
-    
-    def show_results(self):
-        """Muestra resultados y métricas"""
-        self.results_text.delete(1.0, tk.END)
-        
-        # Contar predicciones
-        unique, counts = np.unique(self.predictions, return_counts=True)
-        pred_dict = dict(zip(unique, counts))
-        
-        results = f"""
-╔═══════════════════════════════════════════════════════════════════╗
-║              RESULTADOS DEL PROCESAMIENTO                         ║
-╚═══════════════════════════════════════════════════════════════════╝
 
-📊 PIPELINE APLICADO:
-─────────────────────────────────────────────────────────────────────
-1. ✓ Filtro Notch de 50 Hz aplicado
-2. ✓ Segmentación en ventanas de 50 muestras (0.25s @ 200Hz)
-3. ✓ Extracción de características:
-   • Media (Ax, Ay, Az)
-   • RMS (Ax)
-   • Varianza (Ay, Gy)
-   • Energía Total
-   • Jerk Promedio (Ax, Ay, Az)
-   • Entropía (Az)
-   • Energía Rotacional
-   • Máximos y Mínimos (todos los ejes)
-
-4. ✓ Clasificación basada en máximos y mínimos
-
-📈 RESUMEN DE RESULTADOS:
-─────────────────────────────────────────────────────────────────────
-Total de muestras procesadas: {len(self.data)}
-Total de ventanas analizadas: {len(self.predictions)}
-Duración total: {len(self.data)/self.sampling_rate:.2f} segundos
-
-🏷️  DISTRIBUCIÓN DE CLASES:
-─────────────────────────────────────────────────────────────────────
-"""
-        
-        for clase in ['Estático', 'Saltando']:
-            count = pred_dict.get(clase, 0)
-            percentage = (count / len(self.predictions)) * 100 if len(self.predictions) > 0 else 0
-            bar_length = int(percentage / 2)
-            bar = '█' * bar_length + '░' * (50 - bar_length)
-            results += f"{clase:12s}: {count:4d} ventanas ({percentage:5.1f}%) {bar}\n"
-        
-        results += f"""
-─────────────────────────────────────────────────────────────────────
-📊 ESTADÍSTICAS DE CARACTERÍSTICAS (Promedio):
-─────────────────────────────────────────────────────────────────────
-RMS Ax:                {self.features['RMS_Ax'].mean():.4f} g
-Energía Total:         {self.features['Energia_Total'].mean():.2f}
-Energía Rotacional:    {self.features['Energia_Rotacional'].mean():.2f}
-Jerk Promedio Ax:      {self.features['Jerk_Promedio_Ax'].mean():.4f}
-Entropía Az:           {self.features['Entropia_Az'].mean():.4f}
-
-🎯 CRITERIOS DE CLASIFICACIÓN:
-─────────────────────────────────────────────────────────────────────
-• ESTÁTICO: Baja variación en aceleración y rotación
-• SALTANDO: Alta variación en aceleración (>0.5g) y rotación (>50°/s)
-
-💡 Nota: Los umbrales pueden ajustarse según tus datos específicos
-"""
-        
-        self.results_text.insert(1.0, results)
-
-
-#---------------MODULO B ------------------------------------------------------------------------
+#-----------------------Modulo B ----------------------------------------------
 class ModuleB:
     def __init__(self, window):
         self.window = window
@@ -583,173 +583,21 @@ class ModuleB:
         self.window.geometry("1200x800")
         self.window.configure(bg="#ECF0F1")
         
-        self.is_acquiring = False
-        self.data_buffer = []
-        
         # Header
-        header = tk.Frame(window, bg="#2ECC71", height=80)
+        header = tk.Frame(window, bg="#D348D8", height=80)
         header.pack(fill="x")
-        
-        title = tk.Label(header, text="📡 MÓDULO B: Adquisición en Vivo",
-                        font=("Arial", 20, "bold"), bg="#2ECC71", fg="white")
+        title = tk.Label(header, text="MÓDULO B: Adquisición en Vivo",
+                         font=("Arial", 20, "bold"), bg="#DA2DAE", fg="white")
         title.pack(pady=25)
         
-        # Control Panel
-        control_frame = tk.Frame(window, bg="#ECF0F1")
-        control_frame.pack(fill="x", padx=20, pady=10)
+        # Contenido simple para el módulo B
+        content = tk.Frame(window, bg="#ECF0F1")
+        content.pack(expand=True, fill="both", padx=50, pady=50)
         
-        self.btn_start = tk.Button(control_frame, text="▶ Iniciar Adquisición",
-                                   font=("Arial", 12), bg="#27AE60", fg="white",
-                                   command=self.start_acquisition, width=20)
-        self.btn_start.pack(side="left", padx=5)
-        
-        self.btn_stop = tk.Button(control_frame, text="⏹ Detener",
-                                  font=("Arial", 12), bg="#E74C3C", fg="white",
-                                  command=self.stop_acquisition, width=20,
-                                  state="disabled")
-        self.btn_stop.pack(side="left", padx=5)
-        
-        btn_save = tk.Button(control_frame, text="💾 Guardar Datos",
-                            font=("Arial", 12), bg="#3498DB", fg="white",
-                            command=self.save_data, width=20)
-        btn_save.pack(side="left", padx=5)
-        
-        btn_process = tk.Button(control_frame, text="⚙ Procesar",
-                               font=("Arial", 12), bg="#9B59B6", fg="white",
-                               command=self.process_acquired_data, width=20)
-        btn_process.pack(side="left", padx=5)
-        
-        # Status
-        self.status_label = tk.Label(control_frame, 
-                                     text="Estado: Listo para adquirir",
-                                     font=("Arial", 10, "bold"), bg="#ECF0F1")
-        self.status_label.pack(side="left", padx=20)
-        
-        # Gráficas en tiempo real
-        self.setup_plots()
-    
-    def setup_plots(self):
-        plot_frame = tk.Frame(self.window, bg="white")
-        plot_frame.pack(fill="both", expand=True, padx=20, pady=10)
-        
-        self.fig = Figure(figsize=(12, 6))
-        
-        # Acelerómetro
-        self.ax1 = self.fig.add_subplot(211)
-        self.ax1.set_title("Acelerómetro (Ax)", fontsize=12, fontweight='bold')
-        self.ax1.set_ylabel("Aceleración (g)")
-        self.ax1.grid(True, alpha=0.3)
-        self.line1, = self.ax1.plot([], [], 'b-', linewidth=2)
-        
-        # Giroscopio
-        self.ax2 = self.fig.add_subplot(212)
-        self.ax2.set_title("Giroscopio (Gx)", fontsize=12, fontweight='bold')
-        self.ax2.set_xlabel("Muestras")
-        self.ax2.set_ylabel("Velocidad Angular (°/s)")
-        self.ax2.grid(True, alpha=0.3)
-        self.line2, = self.ax2.plot([], [], 'r-', linewidth=2)
-        
-        self.fig.tight_layout()
-        
-        self.canvas = FigureCanvasTkAgg(self.fig, plot_frame)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True)
-    
-    def start_acquisition(self):
-        self.is_acquiring = True
-        self.data_buffer = []
-        self.btn_start.config(state="disabled")
-        self.btn_stop.config(state="normal")
-        self.status_label.config(text="Estado: Adquiriendo datos...", fg="green")
-        
-        # Iniciar thread de adquisición
-        self.acquisition_thread = threading.Thread(target=self.acquire_data)
-        self.acquisition_thread.daemon = True
-        self.acquisition_thread.start()
-    
-    def acquire_data(self):
-        """
-        AQUÍ IMPLEMENTA LA CONEXIÓN CON EL SENSOR WT9011DCL
-        Este es un ejemplo simulado
-        """
-        while self.is_acquiring:
-            # Simulación de datos del sensor
-            # Reemplaza esto con la lectura real del sensor
-            ax = np.sin(len(self.data_buffer) * 0.1) + np.random.normal(0, 0.1)
-            ay = np.cos(len(self.data_buffer) * 0.1) + np.random.normal(0, 0.1)
-            az = 1.0 + np.random.normal(0, 0.05)
-            gx = np.sin(len(self.data_buffer) * 0.05) * 50 + np.random.normal(0, 5)
-            gy = np.cos(len(self.data_buffer) * 0.05) * 50 + np.random.normal(0, 5)
-            gz = np.random.normal(0, 10)
-            
-            sample = {
-                'Ax': ax, 'Ay': ay, 'Az': az,
-                'Gx': gx, 'Gy': gy, 'Gz': gz,
-                'timestamp': time.time()
-            }
-            
-            self.data_buffer.append(sample)
-            
-            # Actualizar gráficas
-            self.window.after(0, self.update_plots)
-            
-            time.sleep(0.01)  # 100 Hz de frecuencia de muestreo
-    
-    def update_plots(self):
-        if len(self.data_buffer) > 0:
-            # Mostrar últimas 500 muestras
-            window_size = 500
-            data_to_plot = self.data_buffer[-window_size:]
-            
-            ax_data = [d['Ax'] for d in data_to_plot]
-            gx_data = [d['Gx'] for d in data_to_plot]
-            
-            self.line1.set_data(range(len(ax_data)), ax_data)
-            self.line2.set_data(range(len(gx_data)), gx_data)
-            
-            self.ax1.relim()
-            self.ax1.autoscale_view()
-            self.ax2.relim()
-            self.ax2.autoscale_view()
-            
-            self.canvas.draw()
-    
-    def stop_acquisition(self):
-        self.is_acquiring = False
-        self.btn_start.config(state="normal")
-        self.btn_stop.config(state="disabled")
-        self.status_label.config(text=f"Estado: Detenido - {len(self.data_buffer)} muestras capturadas")
-        messagebox.showinfo("Info", f"Adquisición detenida\nMuestras capturadas: {len(self.data_buffer)}")
-    
-    def save_data(self):
-        if not self.data_buffer:
-            messagebox.showwarning("Advertencia", "No hay datos para guardar")
-            return
-        
-        filename = filedialog.asksaveasfilename(
-            defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
-        )
-        
-        if filename:
-            try:
-                df = pd.DataFrame(self.data_buffer)
-                df.to_csv(filename, index=False)
-                messagebox.showinfo("Éxito", f"Datos guardados en:\n{filename}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Error al guardar:\n{str(e)}")
-    
-    def process_acquired_data(self):
-        if not self.data_buffer:
-            messagebox.showwarning("Advertencia", "No hay datos para procesar")
-            return
-        
-        # Procesar con el mismo pipeline del Módulo A
-        messagebox.showinfo("Procesamiento", 
-                          "Procesando datos adquiridos con el pipeline...\n"
-                          "Implementa aquí la misma lógica del Módulo A")
+        label = tk.Label(content, text="Módulo B - Adquisición en Vivo\n\n(Esta funcionalidad está en desarrollo)",
+                        font=("Arial", 16), bg="#ECF0F1", fg="#2C3E50")
+        label.pack(expand=True)
 
-
-# Ejecutar aplicación
 if __name__ == "__main__":
     root = tk.Tk()
     app = MainWindow(root)
